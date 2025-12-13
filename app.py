@@ -70,7 +70,6 @@ def register():
     finally:
         cur.close()
         conn.close()
-
     return jsonify({"message": "user created"}), 201
 
 @app.route("/auth/login", methods=["POST"])
@@ -89,10 +88,8 @@ def login():
         cur.close()
         conn.close()
 
-    if not user:
-        return jsonify({"error": "User not found"}), 404
-    if not bcrypt.check_password_hash(user["password"], password):
-        return jsonify({"error": "Wrong password"}), 401
+    if not user or not bcrypt.check_password_hash(user["password"], password):
+        return jsonify({"error": "Invalid credentials"}), 401
 
     return jsonify({"message": f"User {username} logged in successfully"})
 
@@ -233,12 +230,11 @@ def delete_chore(chore_id):
 # Search chores
 # ---------------------------
 @app.route("/api/search", methods=["GET", "POST"])
-def search_chores():
+def search():
     if request.method == "POST":
         q = (request.json or {}).get("q", "")
     else:
         q = request.args.get("q", "")
-
     conn, cur = get_cursor()
     try:
         cur.execute("SELECT * FROM chores WHERE chore_name LIKE %s", (f"%{q}%",))
@@ -249,39 +245,36 @@ def search_chores():
     return respond(results)
 
 # ---------------------------
-# Assignments CRUD
+# Assignments CRUD (single function for all methods)
 # ---------------------------
-@app.route("/assignments", methods=["GET"])
-def list_assignments():
-    conn, cur = get_cursor()
-    try:
-        cur.execute("SELECT * FROM chore_assignments")
-        results = cur.fetchall()
-        for r in results:
-            if isinstance(r.get("assigned_date"), (datetime.date, datetime.datetime)):
-                r["assigned_date"] = r["assigned_date"].isoformat()
-            r["is_completed"] = bool(r.get("is_completed"))
-    finally:
-        cur.close()
-        conn.close()
-    return respond({"assignments": results})
+@app.route("/assignments", methods=["GET","POST"])
+def assignments_collection():
+    if request.method == "GET":
+        conn, cur = get_cursor()
+        try:
+            cur.execute("SELECT * FROM chore_assignments")
+            results = cur.fetchall()
+            for r in results:
+                if isinstance(r.get("assigned_date"), (datetime.date, datetime.datetime)):
+                    r["assigned_date"] = r["assigned_date"].isoformat()
+                r["is_completed"] = bool(r.get("is_completed"))
+        finally:
+            cur.close()
+            conn.close()
+        return respond({"assignments": results})
 
-@app.route("/assignments", methods=["POST"])
-def create_assignment():
+    # POST
     payload = request.json or {}
     member_id = payload.get("member_id")
     chore_id = payload.get("chore_id")
     assigned_date = payload.get("assigned_date")
     is_completed = bool(payload.get("is_completed", False))
-
     if not member_id or not chore_id or not assigned_date:
         return jsonify({"msg":"member_id, chore_id, assigned_date required"}), 400
-
     try:
         datetime.date.fromisoformat(assigned_date)
     except Exception:
         return jsonify({"msg":"assigned_date must be ISO format YYYY-MM-DD"}), 400
-
     conn, cur = get_cursor()
     try:
         cur.execute(
@@ -295,53 +288,55 @@ def create_assignment():
         conn.close()
     return respond({"assignment_id": new_id}, 201)
 
-@app.route("/assignments/<int:assignment_id>", methods=["PUT"])
-def update_assignment(assignment_id):
-    payload = request.json or {}
-    fields, params = [], []
-    if "member_id" in payload: fields.append("member_id=%s"); params.append(payload["member_id"])
-    if "chore_id" in payload: fields.append("chore_id=%s"); params.append(payload["chore_id"])
-    if "assigned_date" in payload:
-        try:
-            datetime.date.fromisoformat(payload["assigned_date"])
-        except Exception:
-            return jsonify({"msg":"assigned_date must be ISO format YYYY-MM-DD"}), 400
-        fields.append("assigned_date=%s"); params.append(payload["assigned_date"])
-    if "is_completed" in payload: fields.append("is_completed=%s"); params.append(int(bool(payload["is_completed"])))
-
-    if not fields:
-        return respond({"assignment_id": assignment_id})
-
-    params.append(assignment_id)
-    sql = f"UPDATE chore_assignments SET {', '.join(fields)} WHERE assignment_id=%s"
-
+@app.route("/assignments/<int:assignment_id>", methods=["GET","PUT","DELETE"])
+def handle_assignment(assignment_id):
     conn, cur = get_cursor()
     try:
-        cur.execute(sql, tuple(params))
-        conn.commit()
+        if request.method == "GET":
+            cur.execute("SELECT * FROM chore_assignments WHERE assignment_id=%s", (assignment_id,))
+            assignment = cur.fetchone()
+            if not assignment:
+                return jsonify({"msg": "assignment not found"}), 404
+            if isinstance(assignment.get("assigned_date"), (datetime.date, datetime.datetime)):
+                assignment["assigned_date"] = assignment["assigned_date"].isoformat()
+            assignment["is_completed"] = bool(assignment.get("is_completed"))
+            return respond(assignment)
+
+        elif request.method == "PUT":
+            payload = request.json or {}
+            fields, params = [], []
+            if "member_id" in payload: fields.append("member_id=%s"); params.append(payload["member_id"])
+            if "chore_id" in payload: fields.append("chore_id=%s"); params.append(payload["chore_id"])
+            if "assigned_date" in payload:
+                try:
+                    datetime.date.fromisoformat(payload["assigned_date"])
+                except Exception:
+                    return jsonify({"msg":"assigned_date must be ISO format YYYY-MM-DD"}), 400
+                fields.append("assigned_date=%s"); params.append(payload["assigned_date"])
+            if "is_completed" in payload: fields.append("is_completed=%s"); params.append(int(bool(payload["is_completed"])))
+            if not fields:
+                return respond({"assignment_id": assignment_id})
+            params.append(assignment_id)
+            sql = f"UPDATE chore_assignments SET {', '.join(fields)} WHERE assignment_id=%s"
+            cur.execute(sql, tuple(params))
+            conn.commit()
+            return respond({"assignment_id": assignment_id})
+
+        elif request.method == "DELETE":
+            cur.execute("DELETE FROM chore_assignments WHERE assignment_id=%s", (assignment_id,))
+            if cur.rowcount == 0:
+                return jsonify({"msg":"assignment not found"}), 404
+            conn.commit()
+            return '', 204
     finally:
         cur.close()
         conn.close()
-    return respond({"assignment_id": assignment_id})
-
-@app.route("/assignments/<int:assignment_id>", methods=["DELETE"])
-def delete_assignment(assignment_id):
-    conn, cur = get_cursor()
-    try:
-        cur.execute("DELETE FROM chore_assignments WHERE assignment_id=%s", (assignment_id,))
-        if cur.rowcount == 0:
-            return jsonify({"msg":"assignment not found"}), 404
-        conn.commit()
-    finally:
-        cur.close()
-        conn.close()
-    return '', 204
 
 # ---------------------------
 # Health check
 # ---------------------------
 @app.route("/", methods=["GET"])
-def health_check():
+def index():
     return jsonify({"msg":"Chore API up. No token required."})
 
 # ---------------------------
