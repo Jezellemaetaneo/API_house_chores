@@ -353,21 +353,32 @@ def assignment_detail(assignment_id):
 # ---------------------------
 # Search chores
 # ---------------------------
+# ---------------------------
+# Search chores (fixed)
+# ---------------------------
 @app.route("/api/search", methods=["GET", "POST"])
 def search():
+    # Determine query string
     if request.method == "POST":
-        q = (request.json or {}).get("q", "")
+        data = request.get_json(silent=True) or {}
+        q = data.get("q", "").strip()
     else:
-        q = request.args.get("q", "")
-    
+        q = (request.args.get("q") or "").strip()
+
+    if not q:
+        return jsonify({"msg": "query parameter 'q' is required"}), 400
+
     conn, cur = get_cursor()
     try:
-        cur.execute("SELECT * FROM chores WHERE chore_name LIKE %s", (f"%{q}%",))
+        # Use parameterized query to prevent SQL injection
+        cur.execute("SELECT chore_id, chore_name, frequency FROM chores WHERE chore_name LIKE %s", (f"%{q}%",))
         results = cur.fetchall()
     finally:
         cur.close()
         conn.close()
-    return respond(results)
+
+    return jsonify({"results": results})
+
 
 # ---------------------------
 # Health check
