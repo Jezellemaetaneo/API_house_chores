@@ -4,7 +4,7 @@ import MySQLdb
 import MySQLdb.cursors
 import datetime
 import os
-
+import xmltodict
 # ---------------------------
 # App setup
 # ---------------------------
@@ -42,7 +42,17 @@ def respond(data, status=200):
     response = make_response(jsonify(data), status)
     response.headers["Content-Type"] = "application/json"
     return response
-
+def respond(data, status=200):
+    fmt = (request.args.get("format") or "json").lower()
+    if fmt == "xml":
+        xml_data = xmltodict.unparse({"response": {"item": data}}, pretty=True)
+        response = make_response(xml_data, status)
+        response.headers["Content-Type"] = "application/xml"
+        return response
+    # Default JSON
+    response = make_response(jsonify(data), status)
+    response.headers["Content-Type"] = "application/json"
+    return response
 # ---------------------------
 # Auth Routes
 # ---------------------------
