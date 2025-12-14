@@ -94,9 +94,17 @@ def to_xml(data, root_name="items"):
 
 def respond(data, root="items", status=200):
     fmt = request.args.get("format", "").lower()
-    accept = request.headers.get("Accept", "")
-    if fmt == "xml" or "application/xml" in accept:
-        return app.response_class(to_xml(data, root), mimetype="application/xml", status=status)
+    accept = request.headers.get("Accept", "").lower()
+
+    # XML response
+    if fmt == "xml" or accept == "application/xml":
+        return app.response_class(
+            to_xml(data, root),
+            mimetype="application/xml",
+            status=status
+        )
+
+    # JSON response (default)
     return jsonify(data), status
 
 # ==================================================
@@ -193,12 +201,30 @@ def members_page():
 <p>
 <b>{{ m.name }}</b>
 <a href="/members/edit/{{ m.member_id }}">✏ Edit</a>
-<form method="POST" action="/members/delete/{{ m.member_id }}" style="display:inline;">
-<button onclick="return confirm('Delete member?')">🗑 Delete</button>
-</form>
+<p>
+<b>{{ m.name }}</b>
+<a href="/members/edit/{{ m.member_id }}">✏ Edit</a>
+</p>
+
 </p>
 {% endfor %}
 """, members=members)
+
+@app.route("/api/members")
+@token_required
+def members_api():
+    keyword = request.args.get("search", "")
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+
+    if keyword:
+        cur.execute("SELECT * FROM members WHERE name LIKE %s", (f"%{keyword}%",))
+    else:
+        cur.execute("SELECT * FROM members")
+
+    data = cur.fetchall()
+    db.close()
+    return respond(data, root="members")
+
 
 @app.route("/members/add", methods=["GET", "POST"])
 @token_required
@@ -271,9 +297,11 @@ def chores_page():
 <p>
 <b>{{ c.chore_name }}</b> - {{ c.frequency }}
 <a href="/chores/edit/{{ c.chore_id }}">✏ Edit</a>
-<form method="POST" action="/chores/delete/{{ c.chore_id }}" style="display:inline;">
-<button onclick="return confirm('Delete chore?')">🗑 Delete</button>
-</form>
+<p>
+<b>{{ c.chore_name }}</b> - {{ c.frequency }}
+<a href="/chores/edit/{{ c.chore_id }}">✏ Edit</a>
+</p>
+
 </p>
 {% endfor %}
 """, chores=chores)
@@ -437,6 +465,44 @@ def delete_assignment(id):
     cur.execute("DELETE FROM chore_assignments WHERE assignment_id=%s", (id,))
     db.commit(); db.close()
     return "<h3>Assignment deleted</h3><a href='/assignments'>Back</a>"
+
+#=================================================
+#JSON AND XML FORMAT
+#================================================
+
+@app.route("/api/chores")
+@token_required
+def chores_api():
+    keyword = request.args.get("search", "")
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+
+    if keyword:
+        cur.execute("SELECT * FROM chores WHERE chore_name LIKE %s", (f"%{keyword}%",))
+    else:
+        cur.execute("SELECT * FROM chores")
+
+    data = cur.fetchall()
+    db.close()
+    return respond(data, root="chores")
+
+@app.route("/api/assignments")
+@token_required
+def assignments_api():
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+
+    cur.execute("""
+        SELECT a.assignment_id, m.name AS member_name,
+               c.chore_name, c.frequency,
+               a.assigned_date, a.is_completed
+        FROM chore_assignments a
+        JOIN members m ON a.member_id = m.member_id
+        JOIN chores c ON a.chore_id = c.chore_id
+    """)
+
+    data = cur.fetchall()
+    db.close()
+    return respond(data, root="assignments")
+
 
 # ==================================================
 # HOME
