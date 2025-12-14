@@ -1,5 +1,5 @@
 # ==================================================
-# HOUSE CHORES API (JSON + XML + CRUD)
+# HOUSE CHORES API (JSON + XML + CRUD + SEARCH)
 # Flask + MySQL + JWT + Session
 # ==================================================
 
@@ -167,18 +167,28 @@ def login():
     return "<h3>Login Success</h3><a href='/members'>View Members</a>"
 
 # ==================================================
-# MEMBERS CRUD PAGE
+# MEMBERS CRUD + SEARCH
 # ==================================================
 @app.route("/members")
 @token_required
 def members_page():
+    keyword = request.args.get("search", "")
     db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
-    cur.execute("SELECT * FROM members")
+    if keyword:
+        cur.execute("SELECT * FROM members WHERE name LIKE %s", (f"%{keyword}%",))
+    else:
+        cur.execute("SELECT * FROM members")
     members = cur.fetchall(); db.close()
-
+    
     return render_template_string("""
 <h1>Members</h1>
-<a href="/members/add">➕ Add Member</a><hr>
+<form method="GET">
+    <input name="search" placeholder="Search members" value="{{ request.args.get('search', '') }}">
+    <button>Search</button>
+    <a href="/members">Reset</a>
+</form>
+<a href="/members/add">➕ Add Member</a> | <a href="/chores">Chores</a> | <a href="/assignments">Assignments</a>
+<hr>
 {% for m in members %}
 <p>
 <b>{{ m.name }}</b>
@@ -235,8 +245,198 @@ def delete_member(id):
     return "<h3>Member deleted</h3><a href='/members'>Back</a>"
 
 # ==================================================
-# TODO: Similar CRUD Pages for Chores & Assignments
+# CHORES CRUD + SEARCH
 # ==================================================
+@app.route("/chores")
+@token_required
+def chores_page():
+    keyword = request.args.get("search", "")
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+    if keyword:
+        cur.execute("SELECT * FROM chores WHERE chore_name LIKE %s", (f"%{keyword}%",))
+    else:
+        cur.execute("SELECT * FROM chores")
+    chores = cur.fetchall(); db.close()
+
+    return render_template_string("""
+<h1>Chores</h1>
+<form method="GET">
+    <input name="search" placeholder="Search chores" value="{{ request.args.get('search', '') }}">
+    <button>Search</button>
+    <a href="/chores">Reset</a>
+</form>
+<a href="/chores/add">➕ Add Chore</a> | <a href="/members">Members</a> | <a href="/assignments">Assignments</a>
+<hr>
+{% for c in chores %}
+<p>
+<b>{{ c.chore_name }}</b> - {{ c.frequency }}
+<a href="/chores/edit/{{ c.chore_id }}">✏ Edit</a>
+<form method="POST" action="/chores/delete/{{ c.chore_id }}" style="display:inline;">
+<button onclick="return confirm('Delete chore?')">🗑 Delete</button>
+</form>
+</p>
+{% endfor %}
+""", chores=chores)
+
+@app.route("/chores/add", methods=["GET", "POST"])
+@token_required
+def add_chore():
+    if request.method == "GET":
+        return """
+        <h2>Add Chore</h2>
+        <form method="POST">
+            <input name="chore_name" placeholder="Chore name" required><br><br>
+            <input name="frequency" placeholder="Frequency (e.g., Daily)" required><br><br>
+            <button>Add</button>
+        </form>
+        <a href="/chores">Back</a>
+        """
+    db = get_db(); cur = db.cursor()
+    cur.execute("INSERT INTO chores (chore_name, frequency) VALUES (%s,%s)",
+                (request.form["chore_name"], request.form["frequency"]))
+    db.commit(); db.close()
+    return "<h3>Chore added</h3><a href='/chores'>Back</a>"
+
+@app.route("/chores/edit/<int:id>", methods=["GET", "POST"])
+@token_required
+def edit_chore(id):
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+    if request.method == "GET":
+        cur.execute("SELECT * FROM chores WHERE chore_id=%s", (id,))
+        chore = cur.fetchone(); db.close()
+        return f"""
+        <h2>Edit Chore</h2>
+        <form method="POST">
+            <input name="chore_name" value="{chore['chore_name']}" required><br><br>
+            <input name="frequency" value="{chore['frequency']}" required><br><br>
+            <button>Update</button>
+        </form>
+        <a href="/chores">Back</a>
+        """
+    cur.execute("UPDATE chores SET chore_name=%s, frequency=%s WHERE chore_id=%s",
+                (request.form["chore_name"], request.form["frequency"], id))
+    db.commit(); db.close()
+    return "<h3>Chore updated</h3><a href='/chores'>Back</a>"
+
+@app.route("/chores/delete/<int:id>", methods=["POST"])
+@token_required
+def delete_chore(id):
+    db = get_db(); cur = db.cursor()
+    cur.execute("DELETE FROM chores WHERE chore_id=%s", (id,))
+    db.commit(); db.close()
+    return "<h3>Chore deleted</h3><a href='/chores'>Back</a>"
+
+# ==================================================
+# ASSIGNMENTS CRUD + SEARCH
+# ==================================================
+@app.route("/assignments")
+@token_required
+def assignments_page():
+    keyword = request.args.get("search", "")
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+    
+    sql = """
+        SELECT a.assignment_id, m.name as member_name, c.chore_name, c.frequency, a.assigned_date, a.is_completed
+        FROM chore_assignments a
+        JOIN members m ON a.member_id = m.member_id
+        JOIN chores c ON a.chore_id = c.chore_id
+    """
+    if keyword:
+        sql += " WHERE m.name LIKE %s OR c.chore_name LIKE %s"
+        cur.execute(sql, (f"%{keyword}%", f"%{keyword}%"))
+    else:
+        cur.execute(sql)
+    
+    assignments = cur.fetchall(); db.close()
+    
+    return render_template_string("""
+<h1>Chore Assignments</h1>
+<form method="GET">
+    <input name="search" placeholder="Search assignments" value="{{ request.args.get('search', '') }}">
+    <button>Search</button>
+    <a href="/assignments">Reset</a>
+</form>
+<a href="/assignments/add">➕ Add Assignment</a> | <a href="/members">Members</a> | <a href="/chores">Chores</a>
+<hr>
+{% for a in assignments %}
+<p>
+<b>{{ a.member_name }}</b> ➡ <b>{{ a.chore_name }}</b> ({{ a.frequency }}) on {{ a.assigned_date }} 
+[{{ '✅' if a.is_completed else '❌' }}]
+<a href="/assignments/edit/{{ a.assignment_id }}">✏ Edit</a>
+<form method="POST" action="/assignments/delete/{{ a.assignment_id }}" style="display:inline;">
+<button onclick="return confirm('Delete assignment?')">🗑 Delete</button>
+</form>
+</p>
+{% endfor %}
+""", assignments=assignments)
+
+@app.route("/assignments/add", methods=["GET", "POST"])
+@token_required
+def add_assignment():
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+    if request.method == "GET":
+        cur.execute("SELECT * FROM members"); members = cur.fetchall()
+        cur.execute("SELECT * FROM chores"); chores = cur.fetchall()
+        db.close()
+        options_members = "".join([f"<option value='{m['member_id']}'>{m['name']}</option>" for m in members])
+        options_chores = "".join([f"<option value='{c['chore_id']}'>{c['chore_name']}</option>" for c in chores])
+        return f"""
+        <h2>Add Assignment</h2>
+        <form method="POST">
+            Member: <select name="member_id">{options_members}</select><br><br>
+            Chore: <select name="chore_id">{options_chores}</select><br><br>
+            Date: <input type="date" name="assigned_date" required><br><br>
+            Completed: <input type="checkbox" name="is_completed"><br><br>
+            <button>Add</button>
+        </form>
+        <a href="/assignments">Back</a>
+        """
+    is_completed = 1 if request.form.get("is_completed") == "on" else 0
+    cur.execute("INSERT INTO chore_assignments (member_id, chore_id, assigned_date, is_completed) VALUES (%s,%s,%s,%s)",
+                (request.form["member_id"], request.form["chore_id"], request.form["assigned_date"], is_completed))
+    db.commit(); db.close()
+    return "<h3>Assignment added</h3><a href='/assignments'>Back</a>"
+
+@app.route("/assignments/edit/<int:id>", methods=["GET", "POST"])
+@token_required
+def edit_assignment(id):
+    db = get_db(); cur = db.cursor(MySQLdb.cursors.DictCursor)
+    if request.method == "GET":
+        cur.execute("SELECT * FROM chore_assignments WHERE assignment_id=%s", (id,))
+        assignment = cur.fetchone()
+        cur.execute("SELECT * FROM members"); members = cur.fetchall()
+        cur.execute("SELECT * FROM chores"); chores = cur.fetchall()
+        db.close()
+        options_members = "".join([f"<option value='{m['member_id']}' {'selected' if m['member_id']==assignment['member_id'] else ''}>{m['name']}</option>" for m in members])
+        options_chores = "".join([f"<option value='{c['chore_id']}' {'selected' if c['chore_id']==assignment['chore_id'] else ''}>{c['chore_name']}</option>" for c in chores])
+        checked = "checked" if assignment["is_completed"] else ""
+        return f"""
+        <h2>Edit Assignment</h2>
+        <form method="POST">
+            Member: <select name="member_id">{options_members}</select><br><br>
+            Chore: <select name="chore_id">{options_chores}</select><br><br>
+            Date: <input type="date" name="assigned_date" value="{assignment['assigned_date']}" required><br><br>
+            Completed: <input type="checkbox" name="is_completed" {checked}><br><br>
+            <button>Update</button>
+        </form>
+        <a href="/assignments">Back</a>
+        """
+    is_completed = 1 if request.form.get("is_completed") == "on" else 0
+    cur.execute("""
+        UPDATE chore_assignments 
+        SET member_id=%s, chore_id=%s, assigned_date=%s, is_completed=%s 
+        WHERE assignment_id=%s
+    """, (request.form["member_id"], request.form["chore_id"], request.form["assigned_date"], is_completed, id))
+    db.commit(); db.close()
+    return "<h3>Assignment updated</h3><a href='/assignments'>Back</a>"
+
+@app.route("/assignments/delete/<int:id>", methods=["POST"])
+@token_required
+def delete_assignment(id):
+    db = get_db(); cur = db.cursor()
+    cur.execute("DELETE FROM chore_assignments WHERE assignment_id=%s", (id,))
+    db.commit(); db.close()
+    return "<h3>Assignment deleted</h3><a href='/assignments'>Back</a>"
 
 # ==================================================
 # HOME
